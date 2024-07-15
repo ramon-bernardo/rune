@@ -33,6 +33,7 @@ macro_rules! _rune_diagnose {
 #[doc(inline)]
 pub(crate) use _rune_diagnose as rune_diagnose;
 
+#[cfg(debug_assertions)]
 pub(crate) enum RuneAssert {
     /// Assert should panic.
     Panic,
@@ -40,6 +41,7 @@ pub(crate) enum RuneAssert {
     Error,
 }
 
+#[cfg(debug_assertions)]
 impl RuneAssert {
     /// Test if the assert is a panic.
     pub(crate) fn is_panic(&self) -> bool {
@@ -47,7 +49,7 @@ impl RuneAssert {
     }
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), debug_assertions))]
 mod r#impl {
     use core::fmt;
 
@@ -75,7 +77,7 @@ mod r#impl {
 }
 
 /// Test whether current assertions model should panic.
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", debug_assertions))]
 mod r#impl {
     use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -109,4 +111,5 @@ mod r#impl {
     }
 }
 
+#[cfg(debug_assertions)]
 pub(crate) use self::r#impl::*;
