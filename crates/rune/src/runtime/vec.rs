@@ -125,6 +125,16 @@ impl Vec {
         VmResult::Ok(())
     }
 
+    /// Resizes the `Vec` in-place so that `len` is equal to `new_len`.
+    ///
+    /// If `new_len` is greater than `len`, the `Vec` is extended by the
+    /// difference, with each additional slot filled with `value`. If `new_len`
+    /// is less than `len`, the `Vec` is simply truncated.
+    pub fn resize(&mut self, new_len: usize, value: Value) -> VmResult<()> {
+        vm_try!(self.inner.try_resize(new_len, value));
+        VmResult::Ok(())
+    }
+
     /// Appends an element to the back of a dynamic vector.
     pub fn push(&mut self, value: Value) -> alloc::Result<()> {
         self.inner.try_push(value)
