@@ -417,7 +417,6 @@
 - {kind: "syntax", variant: "BlockBody", doc: "the body of a block"}
 - {kind: "syntax", variant: "Expr", doc: "an expression"}
 - {kind: "syntax", variant: "ExprChain", doc: "a chain of expressions"}
-- {kind: "syntax", variant: "ExprPath", doc: "a plain path expression"}
 - {kind: "syntax", variant: "ExprTuple", doc: "a tuple expression"}
 - {kind: "syntax", variant: "ExprArray", doc: "an array expression"}
 - {kind: "syntax", variant: "ExprUnary", doc: "a unary expression"}
@@ -426,12 +425,12 @@
 - {kind: "syntax", variant: "ExprTry", doc: "a try expression"}
 - {kind: "syntax", variant: "ExprIndex", doc: "an indexing expression"}
 - {kind: "syntax", variant: "ExprCall", doc: "a call expression"}
-- {kind: "syntax", variant: "ExprMacroCall", doc: "a call expression"}
+- {kind: "syntax", variant: "ExprMacroCall", doc: "a macro call expression"}
 - {kind: "syntax", variant: "ExprObject", doc: "an anonymous object expression"}
 - {kind: "syntax", variant: "ExprMatch", doc: "a match expression"}
 - {kind: "syntax", variant: "ExprSelect", doc: "a select expression"}
-- {kind: "syntax", variant: "ExprAwait", doc: "a select expression"}
-- {kind: "syntax", variant: "ExprField", doc: "a select expression"}
+- {kind: "syntax", variant: "ExprAwait", doc: "an `.await` expression"}
+- {kind: "syntax", variant: "ExprField", doc: "a field expression"}
 - {kind: "syntax", variant: "ExprOperator", doc: "the operator in an expression"}
 - {kind: "syntax", variant: "ExprIf", doc: "an `if` expression"}
 - {kind: "syntax", variant: "ExprElse", doc: "the `else` part of an if-expression"}
@@ -466,7 +465,9 @@
 - {kind: "syntax", variant: "AnonymousObjectKey", doc: "an `#{` anonymous object key"}
 - {kind: "syntax", variant: "Attribute", doc: "an attribute"}
 - {kind: "syntax", variant: "InnerAttribute", doc: "an inner attribute"}
-- {kind: "syntax", variant: "Modifiers", doc: "item modifiers, like `pub const`"}
+- {kind: "syntax", variant: "Modifiers", doc: "modifiers"}
+- {kind: "syntax", variant: "ModifierSuper", doc: "the `(super)` modifier"}
+- {kind: "syntax", variant: "ModifierSelf", doc: "the `(self)` modifier"}
 - {kind: "syntax", variant: "ModifierCrate", doc: "the `(crate)` modifier"}
 - {kind: "syntax", variant: "ModifierIn", doc: "the `(in <path>)` modifier"}
 - {kind: "syntax", variant: "TokenStream", doc: "a raw token stream"}

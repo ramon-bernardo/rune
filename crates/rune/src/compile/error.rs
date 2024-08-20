@@ -2,6 +2,8 @@ use core::convert::Infallible;
 use core::fmt;
 
 #[cfg(feature = "std")]
+use std::io;
+#[cfg(feature = "std")]
 use std::path::PathBuf;
 
 use crate as rune;
@@ -19,7 +21,6 @@ use crate::query::MissingId;
 use crate::runtime::debug::DebugSignature;
 use crate::runtime::unit::EncodeError;
 use crate::runtime::{AccessError, RuntimeError, TypeInfo, TypeOf, VmError};
-use crate::shared::CapacityError;
 #[cfg(feature = "std")]
 use crate::source;
 use crate::{Hash, Item, ItemBuf, SourceId};
@@ -117,11 +118,18 @@ impl From<fmt::Error> for ErrorKind {
     }
 }
 
-#[cfg(feature = "fmt")]
 impl From<syntree::Error> for ErrorKind {
     #[inline]
     fn from(error: syntree::Error) -> Self {
         ErrorKind::Syntree(error)
+    }
+}
+
+#[cfg(feature = "std")]
+impl From<io::Error> for ErrorKind {
+    #[inline]
+    fn from(error: io::Error) -> Self {
+        Self::from(anyhow::Error::from(error))
     }
 }
 
@@ -235,18 +243,8 @@ pub(crate) enum ErrorKind {
     Custom {
         error: anyhow::Error,
     },
-    Expected {
-        actual: Expectation,
-        expected: Expectation,
-    },
-    Unsupported {
-        what: Expectation,
-    },
     AllocError {
         error: alloc::Error,
-    },
-    CapacityError {
-        error: CapacityError,
     },
     IrError(IrErrorKind),
     MetaError(MetaError),
@@ -260,13 +258,19 @@ pub(crate) enum ErrorKind {
     MissingId(MissingId<ItemId>),
     MissingNonZeroId(MissingId<NonZeroId>),
     UnescapeError(unescape::ErrorKind),
-    #[cfg(feature = "fmt")]
     Syntree(syntree::Error),
     FormatError,
     #[cfg(feature = "std")]
     SourceError {
         path: PathBuf,
         error: source::FromPathError,
+    },
+    Expected {
+        actual: Expectation,
+        expected: Expectation,
+    },
+    Unsupported {
+        what: Expectation,
     },
     #[cfg(feature = "std")]
     ModNotFound {
@@ -545,16 +549,13 @@ pub(crate) enum ErrorKind {
     BadSpan {
         len: usize,
     },
-    #[cfg(feature = "fmt")]
-    UnsupportedSyntax {
-        what: &'static str,
-        actual: Expectation,
-    },
-    #[cfg(feature = "fmt")]
     UnexpectedEndOfSyntax {
         inside: Expectation,
     },
-    #[cfg(feature = "fmt")]
+    UnexpectedEndOfSyntaxWith {
+        inside: Expectation,
+        expected: Expectation,
+    },
     ExpectedSyntaxEnd {
         inside: Expectation,
         actual: Expectation,
@@ -564,11 +565,27 @@ pub(crate) enum ErrorKind {
         level: isize,
         indent: usize,
     },
-    #[cfg(feature = "fmt")]
     ExpectedSyntax {
+        expected: Expectation,
+        actual: Expectation,
+    },
+    ExpectedSyntaxIn {
         inside: Expectation,
         expected: Expectation,
         actual: Expectation,
+    },
+    ExpectedOne {
+        inside: Expectation,
+        expected: Expectation,
+    },
+    ExpectedAtMostOne {
+        inside: Expectation,
+        expected: Expectation,
+        count: usize,
+    },
+    ExpectedAtLeastOne {
+        inside: Expectation,
+        expected: Expectation,
     },
     #[cfg(feature = "fmt")]
     UnsupportedDelimiter {
@@ -591,6 +608,7 @@ cfg_std! {
     impl std::error::Error for ErrorKind {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             match self {
+                ErrorKind::Custom { error } => Some(error.as_ref()),
                 ErrorKind::IrError(source) => Some(source),
                 ErrorKind::MetaError(source) => Some(source),
                 ErrorKind::AccessError(source) => Some(source),
@@ -614,16 +632,7 @@ impl fmt::Display for ErrorKind {
             ErrorKind::Custom { error } => {
                 error.fmt(f)?;
             }
-            ErrorKind::Expected { actual, expected } => {
-                write!(f, "Expected `{expected}`, but got `{actual}`",)?;
-            }
-            ErrorKind::Unsupported { what } => {
-                write!(f, "Unsupported `{what}`")?;
-            }
             ErrorKind::AllocError { error } => {
-                error.fmt(f)?;
-            }
-            ErrorKind::CapacityError { error } => {
                 error.fmt(f)?;
             }
             ErrorKind::IrError(error) => {
@@ -662,7 +671,6 @@ impl fmt::Display for ErrorKind {
             ErrorKind::UnescapeError(error) => {
                 error.fmt(f)?;
             }
-            #[cfg(feature = "fmt")]
             ErrorKind::Syntree(error) => {
                 error.fmt(f)?;
             }
@@ -676,6 +684,12 @@ impl fmt::Display for ErrorKind {
                     "Failed to load source at `{path}`: {error}",
                     path = path.display(),
                 )?;
+            }
+            ErrorKind::Expected { actual, expected } => {
+                write!(f, "Expected {expected} but got {actual}",)?;
+            }
+            ErrorKind::Unsupported { what } => {
+                write!(f, "Unsupported {what}")?;
             }
             #[cfg(feature = "std")]
             ErrorKind::ModNotFound { path } => {
@@ -1121,15 +1135,15 @@ impl fmt::Display for ErrorKind {
             ErrorKind::BadSpan { len } => {
                 write!(f, "Span is outside of source 0-{len}")?;
             }
-            #[cfg(feature = "fmt")]
-            ErrorKind::UnsupportedSyntax { what, actual } => {
-                write!(f, "Unsupported {what}, got {actual}")?;
-            }
-            #[cfg(feature = "fmt")]
             ErrorKind::UnexpectedEndOfSyntax { inside } => {
                 write!(f, "Unexpected end of syntax while parsing {inside}")?;
             }
-            #[cfg(feature = "fmt")]
+            ErrorKind::UnexpectedEndOfSyntaxWith { inside, expected } => {
+                write!(
+                    f,
+                    "Expected {expected} but got end of syntax while parsing {inside}"
+                )?;
+            }
             ErrorKind::ExpectedSyntaxEnd { inside, actual } => {
                 write!(
                     f,
@@ -1140,8 +1154,10 @@ impl fmt::Display for ErrorKind {
             ErrorKind::BadIndent { level, indent } => {
                 write!(f, "Got bad indent {level} with existing {indent}")?;
             }
-            #[cfg(feature = "fmt")]
-            ErrorKind::ExpectedSyntax {
+            ErrorKind::ExpectedSyntax { expected, actual } => {
+                write!(f, "Expected {expected} but got {actual}")?;
+            }
+            ErrorKind::ExpectedSyntaxIn {
                 inside,
                 expected,
                 actual,
@@ -1150,6 +1166,22 @@ impl fmt::Display for ErrorKind {
                     f,
                     "Expected {expected} but got {actual} while parsing {inside}"
                 )?;
+            }
+            ErrorKind::ExpectedOne { inside, expected } => {
+                write!(f, "Expected {expected} while parsing {inside}")?;
+            }
+            ErrorKind::ExpectedAtMostOne {
+                inside,
+                expected,
+                count,
+            } => {
+                write!(
+                    f,
+                    "Expected one {expected} but got {count} of them while parsing {inside}"
+                )?;
+            }
+            ErrorKind::ExpectedAtLeastOne { inside, expected } => {
+                write!(f, "Expected one {expected} while parsing {inside}")?;
             }
             #[cfg(feature = "fmt")]
             ErrorKind::UnsupportedDelimiter { expectation } => {
@@ -1204,13 +1236,6 @@ impl From<alloc::Error> for ErrorKind {
     #[inline]
     fn from(error: alloc::Error) -> Self {
         ErrorKind::AllocError { error }
-    }
-}
-
-impl From<CapacityError> for ErrorKind {
-    #[inline]
-    fn from(error: CapacityError) -> Self {
-        ErrorKind::CapacityError { error }
     }
 }
 

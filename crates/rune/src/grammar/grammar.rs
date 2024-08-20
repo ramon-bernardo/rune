@@ -14,7 +14,7 @@ struct ErrorCx;
 
 impl ExprCx for ErrorCx {
     fn recover(&self, p: &mut Parser<'_>) -> Result<()> {
-        Err(p.unsupported(0, "expression")?)
+        Err(p.expected_at(0, Kind::Expr)?)
     }
 }
 
@@ -79,6 +79,7 @@ pub(super) fn root(p: &mut Parser<'_>) -> Result<()> {
         stmt(p)?;
     }
 
+    p.flush_ws()?;
     p.close()?;
     Ok(())
 }
@@ -256,6 +257,14 @@ fn modifiers(p: &mut Parser<'_>) -> Result<Modifiers> {
                     p.bump()?;
 
                     let kind = match p.peek()? {
+                        K![super] => {
+                            p.bump()?;
+                            ModifierSuper
+                        }
+                        K![self] => {
+                            p.bump()?;
+                            ModifierSelf
+                        }
                         K![crate] => {
                             p.bump()?;
                             ModifierCrate
@@ -278,6 +287,9 @@ fn modifiers(p: &mut Parser<'_>) -> Result<Modifiers> {
             }
             K![async] => {
                 mods.is_async = true;
+                p.bump()?;
+            }
+            K![move] => {
                 p.bump()?;
             }
             _ => {
@@ -447,6 +459,8 @@ fn item_fn(p: &mut Parser<'_>) -> Result<()> {
     if p.peek()? == K!['('] {
         let c = p.checkpoint()?;
         p.bump()?;
+
+        p.bump_while(K![,])?;
 
         while is_pat(p)? {
             pat(p)?;
@@ -666,6 +680,7 @@ fn outer_expr_with(
     kind = expr_chain(p, &c, kind)?;
 
     if p.peek()? == K![=] {
+        p.close_at(&c, Expr)?;
         p.bump()?;
         expr_with(p, brace, Range::Yes, Binary::Yes, cx)?;
         p.close_at(&c, ExprAssign)?;
@@ -673,7 +688,8 @@ fn outer_expr_with(
     }
 
     if matches!(binary, Binary::Yes) {
-        let lookahead = ast::BinOp::from_peeker(p)?;
+        let slice = p.array::<2>()?;
+        let lookahead = ast::BinOp::from_slice(&slice);
 
         kind = if expr_binary(p, lookahead, 0, brace, cx)? {
             p.close_at(&c, ExprBinary)?;
@@ -730,7 +746,7 @@ fn expr_primary(p: &mut Parser<'_>, brace: Brace, range: Range, cx: &dyn ExprCx)
                     p.bump()?;
                     ExprMacroCall
                 }
-                _ => ExprPath,
+                _ => return Ok(Path),
             }
         }
         K!['('] => expr_tuple_or_group(p)?,
@@ -1206,14 +1222,8 @@ fn expr_binary(
 
         has_any = true;
 
-        lookahead = ast::BinOp::from_peeker(p)?;
-
-        if matches!(
-            lookahead,
-            Some(ast::BinOp::DotDot(..) | ast::BinOp::DotDotEq(..))
-        ) {
-            break;
-        }
+        let slice = p.array::<2>()?;
+        lookahead = ast::BinOp::from_slice(&slice);
 
         while let Some(next) = lookahead {
             match (precedence, next.precedence()) {
@@ -1223,7 +1233,8 @@ fn expr_binary(
                         p.close_at(&c, ExprBinary)?;
                     }
 
-                    lookahead = ast::BinOp::from_peeker(p)?;
+                    let slice = p.array::<2>()?;
+                    lookahead = ast::BinOp::from_slice(&slice);
                     continue;
                 }
                 (lh, rh) if lh == rh => {

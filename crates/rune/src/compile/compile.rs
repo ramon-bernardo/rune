@@ -9,7 +9,7 @@ use crate::hir;
 use crate::indexing::FunctionAst;
 use crate::macros::Storage;
 use crate::parse::Resolve;
-use crate::query::{Build, BuildEntry, GenericsParameters, Query, SecondaryBuild, Used};
+use crate::query::{Build, BuildEntry, Query, SecondaryBuild, Used};
 use crate::runtime::unit::UnitEncoder;
 use crate::shared::{Consts, Gen};
 use crate::worker::{LoadFileKind, Task, Worker};
@@ -185,36 +185,15 @@ impl<'arena> CompileBuildEntry<'_, 'arena> {
                 // For instance functions, we are required to know the type hash
                 // of the type it is associated with to perform the proper
                 // naming of the function.
-                let type_hash = if f.is_instance {
-                    let Some(impl_item) =
-                        f.impl_item.and_then(|item| self.q.inner.items.get(&item))
-                    else {
-                        return Err(compile::Error::msg(
-                            &f.ast,
-                            "Impl item has not been expanded",
-                        ));
-                    };
-
-                    let meta = self.q.lookup_meta(
-                        &location,
-                        impl_item.item,
-                        GenericsParameters::default(),
-                    )?;
-
-                    let Some(type_hash) = meta.type_hash_of() else {
-                        return Err(compile::Error::expected_meta(
-                            &f.ast,
-                            meta.info(self.q.pool)?,
-                            "type for associated function",
-                        ));
-                    };
-
-                    Some(type_hash)
+                let type_hash = if let Some(item) = f.impl_item.filter(|_| f.is_instance) {
+                    Some(self.q.pool.item_type_hash(item))
                 } else {
                     None
                 };
 
                 let (debug_args, span): (_, &dyn Spanned) = match &f.ast {
+                    FunctionAst::Bare(node) => (Box::default(), node),
+                    FunctionAst::Node(node, _) => (Box::default(), node),
                     FunctionAst::Item(ast) => {
                         let debug_args = format_ast_args(
                             self.q.sources,
@@ -230,7 +209,7 @@ impl<'arena> CompileBuildEntry<'_, 'arena> {
                 let arena = hir::Arena::new();
                 let mut secondary_builds = Vec::new();
 
-                let mut cx = hir::lowering::Ctxt::with_query(
+                let mut cx = hir::Ctxt::with_query(
                     &arena,
                     self.q.borrow(),
                     item_meta.location.source_id,
@@ -238,6 +217,22 @@ impl<'arena> CompileBuildEntry<'_, 'arena> {
                 )?;
 
                 let hir = match &f.ast {
+                    FunctionAst::Bare(node) => {
+                        #[cfg(feature = "std")]
+                        if cx.q.options.hir.print_tree {
+                            node.print_with_sources(cx.q.sources)?;
+                        }
+
+                        node.parse(|p| hir::lowering2::bare(&mut cx, p))?
+                    }
+                    FunctionAst::Node(node, _) => {
+                        #[cfg(feature = "std")]
+                        if cx.q.options.hir.print_tree {
+                            node.print_with_sources(cx.q.sources)?;
+                        }
+
+                        node.parse(|p| hir::lowering2::item_fn(&mut cx, p, f.impl_item.is_some()))?
+                    }
                     FunctionAst::Item(ast) => hir::lowering::item_fn(&mut cx, ast)?,
                     FunctionAst::Empty(ast, span) => hir::lowering::empty_fn(&mut cx, ast, &span)?,
                 };
@@ -257,6 +252,10 @@ impl<'arena> CompileBuildEntry<'_, 'arena> {
                     let instance = match (type_hash, &f.ast) {
                         (Some(type_hash), FunctionAst::Item(ast)) => {
                             let name = ast.name.resolve(resolve_context!(self.q))?;
+                            Some((type_hash, name))
+                        }
+                        (Some(type_hash), FunctionAst::Node(_, Some(name))) => {
+                            let name = name.resolve(resolve_context!(self.q))?;
                             Some((type_hash, name))
                         }
                         _ => None,

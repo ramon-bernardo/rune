@@ -8,7 +8,6 @@ use lsp::Url;
 use ropey::Rope;
 use tokio::sync::Notify;
 
-use crate as rune;
 use crate::alloc::prelude::*;
 use crate::alloc::{self, HashMap, String, Vec};
 use crate::ast::{Span, Spanned};
@@ -23,6 +22,7 @@ use crate::item::ComponentRef;
 use crate::languageserver::connection::Output;
 use crate::languageserver::Language;
 use crate::workspace::{self, WorkspaceError};
+use crate::{self as rune, Diagnostics};
 use crate::{BuildError, Context, Item, Options, Source, SourceId, Sources, Unit};
 
 #[derive(Default)]
@@ -347,7 +347,11 @@ impl<'a> State<'a> {
 
         let options = FmtOptions::DEFAULT;
 
-        let Ok(formatted) = crate::fmt::layout_source_with(&source, &options) else {
+        let mut diagnostics = Diagnostics::new();
+
+        let Ok(formatted) =
+            crate::fmt::layout_source_with(&source, SourceId::EMPTY, &options, &mut diagnostics)
+        else {
             return Ok(None);
         };
 
@@ -392,7 +396,11 @@ impl<'a> State<'a> {
         let mut options = FmtOptions::DEFAULT;
         options.force_newline = false;
 
-        let Ok(formatted) = crate::fmt::layout_source_with(&source, &options) else {
+        let mut diagnostics = Diagnostics::new();
+
+        let Ok(formatted) =
+            crate::fmt::layout_source_with(&source, SourceId::EMPTY, &options, &mut diagnostics)
+        else {
             return Ok(None);
         };
 

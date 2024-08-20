@@ -23,10 +23,10 @@ impl fmt::Display for ModId {
 }
 
 /// The identifier of an item.
-#[derive(Default, Debug, TryClone, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Default, TryClone, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[try_clone(copy)]
 #[repr(transparent)]
-pub(crate) struct ItemId(u32);
+pub struct ItemId(u32);
 
 impl ItemId {
     /// The item corresponding to the root item.
@@ -37,6 +37,12 @@ impl Parse for ItemId {
     #[inline]
     fn parse(_: &mut Parser<'_>) -> compile::Result<Self> {
         Ok(ItemId::ROOT)
+    }
+}
+
+impl fmt::Debug for ItemId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 

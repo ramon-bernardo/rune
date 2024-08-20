@@ -6,7 +6,7 @@ mod query;
 use core::fmt;
 use core::num::NonZeroUsize;
 
-pub(crate) use self::query::{MissingId, Query, QueryInner};
+pub(crate) use self::query::{MissingId, Query, QueryInner, QuerySource};
 
 use crate as rune;
 use crate::alloc::path::PathBuf;
@@ -15,6 +15,7 @@ use crate::ast;
 use crate::ast::{Span, Spanned};
 use crate::compile::ir;
 use crate::compile::{ItemId, ItemMeta, Location, ModId};
+use crate::grammar::{Node, NodeAt, NodeId};
 use crate::hash::Hash;
 use crate::hir;
 use crate::indexing;
@@ -22,12 +23,13 @@ use crate::runtime::format;
 use crate::runtime::Call;
 
 /// Indication whether a value is being evaluated because it's being used or not.
-#[derive(Debug, TryClone, Clone, Copy)]
+#[derive(Default, Debug, TryClone, Clone, Copy)]
 #[try_clone(copy)]
 pub(crate) enum Used {
     /// The value is not being used.
     Unused,
     /// The value is being used.
+    #[default]
     Used,
 }
 
@@ -35,12 +37,6 @@ impl Used {
     /// Test if this used indicates unuse.
     pub(crate) fn is_unused(self) -> bool {
         matches!(self, Self::Unused)
-    }
-}
-
-impl Default for Used {
-    fn default() -> Self {
-        Self::Used
     }
 }
 
@@ -60,6 +56,35 @@ pub(crate) struct Named<'ast> {
 }
 
 impl fmt::Display for Named<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.item, f)
+    }
+}
+
+pub(crate) enum Named2Kind {
+    /// A full path.
+    Full,
+    /// An identifier.
+    Ident(ast::Ident),
+    /// Self value.
+    SelfValue(#[allow(unused)] ast::SelfValue),
+}
+
+/// The result of calling [Query::convert_path2].
+pub(crate) struct Named2<'a> {
+    /// Module named item belongs to.
+    pub(crate) module: ModId,
+    /// The kind of named item.
+    pub(crate) kind: Named2Kind,
+    /// The path resolved to the given item.
+    pub(crate) item: ItemId,
+    /// Trailing parameters.
+    pub(crate) trailing: usize,
+    /// Type parameters if any.
+    pub(crate) parameters: [Option<Node<'a>>; 2],
+}
+
+impl fmt::Display for Named2<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.item, f)
     }
@@ -176,9 +201,25 @@ pub(crate) struct BuildEntry {
     pub(crate) build: Build,
 }
 
+/// The kind of item being implemented.
+pub(crate) enum ItemImplKind {
+    Ast {
+        /// Non-expanded ast of the path.
+        path: Box<ast::Path>,
+        /// Functions in the impl block.
+        functions: Vec<ast::ItemFn>,
+    },
+    Node {
+        /// The path being implemented.
+        path: NodeAt,
+        /// Functions being added.
+        functions: Vec<NodeId>,
+    },
+}
+
 pub(crate) struct ItemImplEntry {
-    /// Non-expanded ast of the path.
-    pub(crate) path: Box<ast::Path>,
+    /// The kind of item being implemented.
+    pub(crate) kind: ItemImplKind,
     /// Location where the item impl is defined and is being expanded.
     pub(crate) location: Location,
     ///See [Indexer][crate::indexing::Indexer].
@@ -187,8 +228,6 @@ pub(crate) struct ItemImplEntry {
     pub(crate) nested_item: Option<Span>,
     /// See [Indexer][crate::indexing::Indexer].
     pub(crate) macro_depth: usize,
-    /// Functions in the impl block.
-    pub(crate) functions: Vec<ast::ItemFn>,
 }
 
 /// A compiled constant function.

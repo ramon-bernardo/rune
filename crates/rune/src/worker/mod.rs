@@ -1,20 +1,20 @@
 //! Worker used by compiler.
 
-use crate::alloc::prelude::*;
-use crate::alloc::{self, HashMap, Vec, VecDeque};
-use crate::ast::{self, Span};
-use crate::compile::{self, ModId};
-use crate::indexing::index;
-use crate::indexing::items::Items;
-use crate::indexing::{IndexItem, Indexer, Scopes};
-use crate::query::{GenericsParameters, Query, Used};
-use crate::SourceId;
-
 mod import;
 mod task;
 mod wildcard_import;
 
-pub(crate) use self::import::Import;
+use rust_alloc::rc::Rc;
+
+use crate::alloc::prelude::*;
+use crate::alloc::{self, HashMap, Vec, VecDeque};
+use crate::ast::{self, Span};
+use crate::compile::{self, ModId};
+use crate::indexing::{index, index2};
+use crate::query::{GenericsParameters, ItemImplKind, Query, Used};
+use crate::SourceId;
+
+pub(crate) use self::import::{Import, ImportState};
 pub(crate) use self::task::{LoadFileKind, Task};
 pub(crate) use self::wildcard_import::WildcardImport;
 
@@ -68,9 +68,6 @@ impl<'a, 'arena> Worker<'a, 'arena> {
                                 return Ok(());
                             };
 
-                            let item = self.q.pool.module_item(mod_item);
-                            tracing::trace!("Load file: {}", item);
-
                             let (root, is_module) = match kind {
                                 LoadFileKind::Root => {
                                     (source.path().map(|p| p.try_to_owned()).transpose()?, false)
@@ -78,46 +75,82 @@ impl<'a, 'arena> Worker<'a, 'arena> {
                                 LoadFileKind::Module { root } => (root, true),
                             };
 
-                            let items = Items::new(item)?;
-
                             macro_rules! indexer {
-                                () => {
-                                    Indexer {
+                                ($tree:expr) => {{
+                                    let item = self.q.pool.module_item(mod_item);
+                                    let items = $crate::indexing::Items::new(item)?;
+
+                                    tracing::trace!(?item, "load file: {}", item);
+
+                                    $crate::indexing::Indexer {
                                         q: self.q.borrow(),
                                         root,
                                         source_id,
                                         items,
-                                        scopes: Scopes::new()?,
-                                        item: IndexItem::new(mod_item, mod_item_id),
+                                        scopes: $crate::indexing::Scopes::new()?,
+                                        item: $crate::indexing::IndexItem::new(
+                                            mod_item,
+                                            mod_item_id,
+                                        ),
                                         nested_item: None,
                                         macro_depth: 0,
                                         loaded: Some(&mut self.loaded),
                                         queue: Some(&mut self.queue),
+                                        tree: $tree,
                                     }
-                                };
+                                }};
                             }
 
-                            if self.q.options.function_body && !is_module {
-                                let ast = crate::parse::parse_all::<ast::EmptyBlock>(
-                                    source.as_str(),
-                                    source_id,
-                                    true,
-                                )?;
+                            let as_function_body = self.q.options.function_body && !is_module;
 
-                                let span = Span::new(0, source.len());
-                                let mut idx = indexer!();
+                            #[allow(clippy::collapsible_else_if)]
+                            if self.q.options.v2 {
+                                let tree = crate::grammar::prepare_text(source.as_str())
+                                    .with_source_id(source_id)
+                                    .ignore_whitespace(true)
+                                    .parse()?;
 
-                                index::empty_block_fn(&mut idx, ast, &span)?;
+                                let tree = Rc::new(tree);
+
+                                #[cfg(feature = "std")]
+                                if self.q.options.print_tree {
+                                    tree.print_with_source(source.as_str())?;
+                                }
+
+                                if as_function_body {
+                                    let mut idx = indexer!(&tree);
+                                    tree.parse_all(|p: &mut crate::grammar::Stream| {
+                                        index2::bare(&mut idx, p)
+                                    })?;
+                                } else {
+                                    let mut idx = indexer!(&tree);
+                                    tree.parse_all(|p| index2::file(&mut idx, p))?;
+                                }
                             } else {
-                                let mut ast = crate::parse::parse_all::<ast::File>(
-                                    source.as_str(),
-                                    source_id,
-                                    true,
-                                )?;
+                                if as_function_body {
+                                    let ast = crate::parse::parse_all::<ast::EmptyBlock>(
+                                        source.as_str(),
+                                        source_id,
+                                        true,
+                                    )?;
 
-                                let mut idx = indexer!();
+                                    let span = Span::new(0, source.len());
 
-                                index::file(&mut idx, &mut ast)?;
+                                    let empty = Rc::default();
+                                    let mut idx = indexer!(&empty);
+
+                                    index::empty_block_fn(&mut idx, ast, &span)?;
+                                } else {
+                                    let mut ast = crate::parse::parse_all::<ast::File>(
+                                        source.as_str(),
+                                        source_id,
+                                        true,
+                                    )?;
+
+                                    let empty = Rc::default();
+                                    let mut idx = indexer!(&empty);
+                                    index::file(&mut idx, &mut ast)?;
+                                }
                             }
 
                             Ok::<_, compile::Error>(())
@@ -168,60 +201,92 @@ impl<'a, 'arena> Worker<'a, 'arena> {
 
             // Expand impl items since they might be non-local. We need to look up the metadata associated with the item.
             while let Some(entry) = self.q.next_impl_item_entry() {
-                tracing::trace!(item = ?self.q.pool.item(entry.path.id), "next impl item entry");
+                macro_rules! indexer {
+                    ($tree:expr, $named:expr, $meta:expr) => {{
+                        let item = self.q.pool.item($meta.item_meta.item);
+                        let items = $crate::indexing::Items::new(item)?;
 
+                        $crate::indexing::Indexer {
+                            q: self.q.borrow(),
+                            root: entry.root,
+                            source_id: entry.location.source_id,
+                            items,
+                            scopes: $crate::indexing::Scopes::new()?,
+                            item: $crate::indexing::IndexItem::with_impl_item(
+                                $named.module,
+                                $named.item,
+                                $meta.item_meta.item,
+                            ),
+                            nested_item: entry.nested_item,
+                            macro_depth: entry.macro_depth,
+                            loaded: Some(&mut self.loaded),
+                            queue: Some(&mut self.queue),
+                            tree: $tree,
+                        }
+                    }};
+                }
+
+                // When converting a path, we conservatively deny `Self` impl
+                // since that is what Rust does, and at some point in the future
+                // we might introduce bounds which would not be communicated
+                // through `Self`.
                 let process = || {
-                    // We conservatively deny `Self` impl since that is what
-                    // Rust does, and at some point in the future we might
-                    // introduce bounds which would not be communicated through
-                    // `Self`.
-                    let named =
-                        self.q
-                            .convert_path_with(&entry.path, true, Used::Used, Used::Unused)?;
+                    match entry.kind {
+                        ItemImplKind::Ast { path, functions } => {
+                            let named =
+                                self.q
+                                    .convert_path_with(&path, true, Used::Used, Used::Unused)?;
 
-                    if let Some((spanned, _)) = named.parameters.into_iter().flatten().next() {
-                        return Err(compile::Error::new(
-                            spanned.span(),
-                            compile::ErrorKind::UnsupportedGenerics,
-                        ));
-                    }
+                            if let Some((spanned, _)) =
+                                named.parameters.into_iter().flatten().next()
+                            {
+                                return Err(compile::Error::new(
+                                    spanned.span(),
+                                    compile::ErrorKind::UnsupportedGenerics,
+                                ));
+                            }
 
-                    let meta = self.q.lookup_meta(
-                        &entry.location,
-                        named.item,
-                        GenericsParameters::default(),
-                    )?;
+                            tracing::trace!(item = ?self.q.pool.item(named.item), "next impl item entry");
 
-                    // TODO: this should not be necessary, since the item being
-                    // referenced should already have been inserted at this
-                    // point.
-                    self.q
-                        .inner
-                        .items
-                        .try_insert(meta.item_meta.item, meta.item_meta)?;
+                            let meta = self.q.lookup_meta(
+                                &entry.location,
+                                named.item,
+                                GenericsParameters::default(),
+                            )?;
 
-                    let item = self.q.pool.item(meta.item_meta.item);
-                    let items = Items::new(item)?;
+                            let empty = Rc::default();
+                            let mut idx = indexer!(&empty, named, meta);
 
-                    let mut idx = Indexer {
-                        q: self.q.borrow(),
-                        root: entry.root,
-                        source_id: entry.location.source_id,
-                        items,
-                        scopes: Scopes::new()?,
-                        item: IndexItem::with_impl_item(
-                            named.module,
-                            named.item,
-                            meta.item_meta.item,
-                        ),
-                        nested_item: entry.nested_item,
-                        macro_depth: entry.macro_depth,
-                        loaded: Some(&mut self.loaded),
-                        queue: Some(&mut self.queue),
-                    };
+                            for f in functions {
+                                index::item_fn(&mut idx, f)?;
+                            }
+                        }
+                        ItemImplKind::Node { path, functions } => {
+                            let named = path.parse(|p| {
+                                self.q.convert_path2_with(p, true, Used::Used, Used::Unused)
+                            })?;
 
-                    for f in entry.functions {
-                        index::item_fn(&mut idx, f)?;
+                            if let Some(spanned) = named.parameters.into_iter().flatten().next() {
+                                return Err(compile::Error::new(
+                                    spanned.span(),
+                                    compile::ErrorKind::UnsupportedGenerics,
+                                ));
+                            }
+
+                            tracing::trace!(item = ?self.q.pool.item(named.item), "next impl item entry");
+
+                            let meta = self.q.lookup_meta(
+                                &entry.location,
+                                named.item,
+                                GenericsParameters::default(),
+                            )?;
+
+                            let mut idx = indexer!(path.tree(), named, meta);
+
+                            for id in functions {
+                                path.parse_id(id, |p| index2::item(&mut idx, p))?;
+                            }
+                        }
                     }
 
                     Ok::<_, compile::Error>(())

@@ -57,7 +57,9 @@ macro_rules! assert_format_with {
 
         $(options.parse_option($option).unwrap();)*
 
-        let actual = match super::layout_source_with(&input, &options) {
+        let mut diagnostics = $crate::Diagnostics::new();
+
+        let actual = match super::layout_source_with(&input, $crate::SourceId::EMPTY, &options, &mut diagnostics) {
             Ok(actual) => actual,
             Err(err) => {
                 panic!("Failed to format source: {:?}", err);

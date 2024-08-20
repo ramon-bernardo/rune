@@ -113,25 +113,22 @@ impl<'a> Prepare<'a> {
         let options = self.options;
         let mut files = Vec::new();
 
-        let mut has_errors = false;
-
         for id in self.sources.source_ids() {
             let Some(source) = self.sources.get(id) else {
                 continue;
             };
 
-            match layout_source_with(source.as_str(), &options.fmt) {
+            match layout_source_with(source.as_str(), id, &options.fmt, diagnostics) {
                 Ok(output) => {
                     files.try_push((id, output))?;
                 }
                 Err(error) => {
-                    has_errors = true;
                     diagnostics.error(id, error)?;
                 }
             }
         }
 
-        if has_errors {
+        if diagnostics.has_error() {
             return Err(FormatError {
                 kind: FormatErrorKind::Build,
             });
@@ -142,21 +139,33 @@ impl<'a> Prepare<'a> {
 }
 
 /// Format the given source with the specified options.
-pub(crate) fn layout_source_with(source: &str, options: &FmtOptions) -> Result<String> {
+pub(crate) fn layout_source_with(
+    source: &str,
+    source_id: SourceId,
+    options: &FmtOptions,
+    diagnostics: &mut Diagnostics,
+) -> Result<String> {
     let tree = crate::grammar::prepare_text(source)
         .without_processing()
         .parse()?;
 
+    #[cfg(feature = "std")]
     if options.print_tree {
-        let o = std::io::stdout();
-        let mut o = o.lock();
-        tree.print_with_source(&mut o, source)?;
+        tree.print_with_source(source)?;
     }
 
     let mut o = String::new();
 
     {
-        let mut o = Formatter::new(Span::new(0, 0), source, &mut o, options);
+        let mut o = Formatter::new(
+            Span::new(0, 0),
+            source,
+            source_id,
+            &mut o,
+            options,
+            diagnostics,
+        );
+
         o.flush_prefix_comments(&tree)?;
         format::root(&mut o, &tree)?;
         o.comments(Comments::Line)?;
